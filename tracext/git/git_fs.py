@@ -14,7 +14,7 @@
 
 from trac.core import *
 from trac.util import TracError, shorten_line
-from trac.util.datefmt import FixedOffset, to_timestamp, format_datetime
+from trac.util.datefmt import FixedOffset, to_timestamp, format_datetime, parse_date
 from trac.util.text import to_unicode
 from trac.versioncontrol.api import \
      Changeset, Node, Repository, IRepositoryConnector, NoSuchChangeset, NoSuchNode
@@ -23,6 +23,9 @@ from trac.versioncontrol.cache import CachedRepository, CachedChangeset
 from trac.versioncontrol.web_ui import IPropertyRenderer
 from trac.config import BoolOption, IntOption, PathOption, Option
 from trac.web.chrome import Chrome
+
+from trac.versioncontrol.api import RepositoryManager
+from trac.timeline.api import ITimelineEventProvider
 
 from genshi.builder import tag
 
@@ -107,7 +110,7 @@ def _parse_user_time(s):
     return user, time
 
 class GitConnector(Component):
-    implements(IRepositoryConnector, IWikiSyntaxProvider)
+    implements(IRepositoryConnector, IWikiSyntaxProvider, ITimelineEventProvider)
 
     def __init__(self):
         self._version = None
@@ -123,6 +126,66 @@ class GitConnector(Component):
             if not self._version['v_compatible']:
                 self.log.error("GIT version %s installed not compatible (need >= %s)" %
                                (self._version['v_str'], self._version['v_min_str']))
+
+    #########################
+    # ITimelineEventProvider
+
+    def get_timeline_filters(self, req):
+        # (internal name, human-readable name, on-by-default)
+        return [('git-tags', 'Git Tags', True)]
+
+    def get_timeline_events(self, req, start, stop, filters):
+        # if git-tags is enabled, get all the git repositories, then
+        # get the tags from each repository and compare their timestamp
+        # to the requested time range.  If they are between start and
+        # stop, return them using Trac's event tuple
+        tags = []
+        if 'git-tags' in filters:
+            rm = RepositoryManager(self.env)
+            all_repositories = rm.get_all_repositories()
+            for reponame in all_repositories:
+                repoinfo = all_repositories[reponame]
+                if 'type' in repoinfo and repoinfo['type'] == 'git':
+                    repo = rm.get_repository(reponame)
+                    for_each_args = [ '--sort=-taggerdate',
+                                      '--format=%(refname:short)|+%(*objectname)|+' +
+                                      '%(taggername) %(taggeremail)|+%(taggerdate:iso8601)|+' +
+                                      '%(subject)',
+                                      'refs/tags' ]
+                    if self._cached_repository:
+                        tag_info = repo.repos.git.repo.for_each_ref(*for_each_args)
+                    else:
+                        tag_info = repo.git.repo.for_each_ref(*for_each_args)
+                    for line in tag_info.splitlines():
+                        (tag_name,tag_deref,user,tag_time_str,tag_msg) = line.split('|+')
+
+                        # Parse time using Trac's parse_time (requires T and Z unfortunately)
+                        date_str, time_str, tz_str = tag_time_str.rsplit(None, 2)
+                        tag_time = parse_date(date_str+'T'+time_str+'Z'+tz_str)
+
+                        if tag_time > start and tag_time < stop:
+                            self.log.debug( 'found tag %s in repo %s'%(tag_name,repoinfo['name']) )
+                            # (internal-name,date,author,opaque-data)
+                            tags.append(('git-tags',tag_time,user,
+                                { 'name':tag_name,
+                                  'repo':repoinfo['name'],
+                                  'deref':tag_deref,
+                                  'msg':tag_msg }))
+                        elif tag_time < start:
+                            # git returns tags in reverse chronological order, so if the current
+                            # tag is before the start, all the remaining will also be
+                            break
+        return tags
+            
+    def render_timeline_event(self, context, field, event):
+        # Timeline will create "<a href="url">title by user<a><br>description"
+        if field == 'title':
+            title = 'Tag %s created in %s'%(event[3]['name'], event[3]['repo'])
+            return title
+        elif field == 'description':
+            return event[3]['msg']
+        elif field == 'url':
+            return context.href.changeset(event[3]['deref'], event[3]['repo'] or None)
 
     #######################
     # IWikiSyntaxProvider
