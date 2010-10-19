@@ -488,7 +488,8 @@ class GitNode(Node):
             self.fs_perm, k, self.fs_sha, self.fs_size, _ = ls_tree_info
 
             # fix-up to the last commit-rev that touched this node
-            rev = repos.git.last_change(rev, p)
+            # Actually, don't call last_change -- for certain repositories, it's really slow
+            #rev = repos.git.last_change(rev, p)
 
             if k == 'tree':
                 pass
