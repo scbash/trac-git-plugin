@@ -158,6 +158,8 @@ class GitConnector(Component):
                         tag_info = repo.git.repo.for_each_ref(*for_each_args)
                     for line in tag_info.splitlines():
                         (tag_name,tag_deref,user,tag_time_str,tag_msg) = line.split('|+')
+                        if not tag_time_str:
+                            continue  # probably a lightweight tag
 
                         # Parse time using Trac's parse_time (requires T and Z unfortunately)
                         date_str, time_str, tz_str = tag_time_str.rsplit(None, 2)
