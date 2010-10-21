@@ -19,7 +19,7 @@ from future27 import namedtuple
 import os, re, sys, time, weakref
 from collections import deque
 from functools import partial
-from threading import Lock
+from threading import Lock, RLock
 from subprocess import Popen, PIPE
 from operator import itemgetter
 import cStringIO
@@ -256,7 +256,7 @@ class Storage(object):
 
         # caches
         self.__rev_cache = None
-        self.__rev_cache_lock = Lock()
+        self.__rev_cache_lock = RLock()
 
         # cache the last 200 commit messages
         self.__commit_msg_cache = SizedDict(200)
@@ -510,6 +510,22 @@ class Storage(object):
                 self.logger.debug("unexpected result from 'git-cat-file tag %s'" % rc)
                 return None
             return sha[1]
+
+        if GitCore.is_sha(rc):
+            # rev-parse returned a sha that isn't in the rev_dict or the tag_set
+            # it's possible the cache is out of date
+            with self.__rev_cache_lock:
+                # A different thread might have already refreshed cache
+                _rev_cache = self.rev_cache  # update local copy
+                if rc in _rev_cache.rev_dict:
+                    return rc
+
+                # If we've gotten here, try rebuilding the cache
+                self.__rev_cache = None
+                _rev_cache = self.rev_cache  # triggers a rebuild
+
+                if rc in _rev_cache.rev_dict:
+                    return rc
 
         return None
 
