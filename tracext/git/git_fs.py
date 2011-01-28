@@ -26,7 +26,7 @@ from trac.web.chrome import Chrome
 
 from genshi.builder import tag
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import sys
 
 if not sys.version_info[:2] >= (2, 5):
@@ -403,8 +403,18 @@ class GitRepository(Repository):
             yield 'tags', t, '/', t
 
     def get_changesets(self, start, stop):
+        last_rev_time = None
+        small_delta = timedelta(microseconds=1)
         for rev in self.git.history_timerange(to_timestamp(start), to_timestamp(stop)):
-            yield self.get_changeset(rev)
+            cur_changeset = self.get_changeset(rev)
+            cur_rev_time = cur_changeset.date
+            if last_rev_time and last_rev_time == cur_rev_time:
+                cur_changeset.date += small_delta
+                small_delta += timedelta(microseconds=1)
+            else:
+                small_delta = timedelta(microseconds=1)
+            last_rev_time = cur_rev_time
+            yield cur_changeset
 
     def get_changeset(self, rev):
         """GitChangeset factory method"""
