@@ -29,11 +29,15 @@ from genshi.builder import tag
 from datetime import datetime, timedelta
 import sys
 
+import re
+
 if not sys.version_info[:2] >= (2, 5):
     raise TracError("Python >= 2.5 dependancy not met")
 
 import PyGIT
 
+# Regex applied to log messages to determine if commit was created by git-notes
+git_notes_re = re.compile('Notes (?:added|removed)|Merged notes')
 
 class GitCachedRepository(CachedRepository):
     """
@@ -407,6 +411,8 @@ class GitRepository(Repository):
         small_delta = timedelta(microseconds=1)
         for rev in self.git.history_timerange(to_timestamp(start), to_timestamp(stop)):
             cur_changeset = self.get_changeset(rev)
+            if git_notes_re.match(cur_changeset.message):
+                continue  # skip this commit
             cur_rev_time = cur_changeset.date
             if last_rev_time and last_rev_time == cur_rev_time:
                 cur_changeset.date += small_delta
